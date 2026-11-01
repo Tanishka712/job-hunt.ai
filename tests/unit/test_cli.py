@@ -76,3 +76,34 @@ async def test_cli_surfaces_rate_limit_ui_action(capsys: pytest.CaptureFixture[s
     assert code == 2
     err = capsys.readouterr().err
     assert "[UI Action: CHANGE_API_KEY]" in err
+
+
+@pytest.mark.unit
+async def test_cli_job_finder_subcommand(capsys: pytest.CaptureFixture[str]) -> None:
+    """`job-finder` CLI command runs S3 Job Finder on inline text and outputs JobSpec + CV score."""
+    fake_llm = FakeLLM(
+        scripted_responses=[
+            """{
+                "title": "Senior AI Engineer",
+                "company": "Acme AI",
+                "location": "Remote",
+                "remote_policy": "remote",
+                "seniority": "senior",
+                "required_skills": ["Python", "FastAPI", "LangGraph"],
+                "nice_to_have_skills": [],
+                "responsibilities": ["Build agents"],
+                "salary_range": "",
+                "source_url": "https://cli.inline/test",
+                "is_job_posting": true
+            }"""
+        ]
+    )
+    code = await async_main(
+        ["job-finder", "Acme AI is hiring a Senior AI Engineer (Python, FastAPI, LangGraph)"],
+        llm_override=fake_llm,
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "[Status]           PARSED" in out
+    assert '"company": "Acme AI"' in out
+    assert "[CV Match Score]" in out

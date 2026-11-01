@@ -41,7 +41,9 @@ class FakeLLM:
         role: AgentRole = AgentRole.LIGHTWEIGHT_PARSER,
         json_mode: bool = False,
         system_prompt: str | None = None,
+        user_api_key: str | None = None,
     ) -> str:
+        _ = user_api_key
         safe_prompt = shield(prompt)
         resolved_sys = shield(get_role_system_prompt(role, system_prompt))
         self.calls.append(
@@ -66,7 +68,9 @@ class FakeLLM:
         role: AgentRole = AgentRole.LIGHTWEIGHT_PARSER,
         retries: int = 2,
         system_prompt: str | None = None,
+        user_api_key: str | None = None,
     ) -> T:
+        _ = user_api_key
         return await call_structured(
             self,
             prompt,

@@ -122,6 +122,7 @@ class LLMClient(Protocol):
         role: AgentRole = AgentRole.LIGHTWEIGHT_PARSER,
         json_mode: bool = False,
         system_prompt: str | None = None,
+        user_api_key: str | None = None,
     ) -> str:
         """Return raw text completion for `prompt` using the model and system prompt for `role`."""
         ...
@@ -134,6 +135,7 @@ class LLMClient(Protocol):
         role: AgentRole = AgentRole.LIGHTWEIGHT_PARSER,
         retries: int = 2,
         system_prompt: str | None = None,
+        user_api_key: str | None = None,
     ) -> T:
         """Return validated Pydantic model `T` with up to `retries` validation retries."""
         ...
