@@ -10,7 +10,12 @@ from pydantic import BaseModel
 
 from app.guardrails.pii_shield import RedactingLogFilter, shield
 from app.guardrails.validator import call_structured
-from app.ports.llm import ROLE_MODEL_ROUTES, AgentRole, ModelRoute
+from app.ports.llm import (
+    ROLE_MODEL_ROUTES,
+    AgentRole,
+    ModelRoute,
+    get_role_system_prompt,
+)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -158,12 +163,17 @@ class GroqAdapter:
         *,
         role: AgentRole = AgentRole.LIGHTWEIGHT_PARSER,
         json_mode: bool = False,
+        system_prompt: str | None = None,
         user_api_key: str | None = None,
     ) -> str:
         api_key = self._resolve_api_key(user_api_key)
         safe_prompt = shield(prompt)
+        safe_system = shield(get_role_system_prompt(role, system_prompt))
         route = self._routes[role]
-        messages = [{"role": "user", "content": safe_prompt}]
+        messages = [
+            {"role": "system", "content": safe_system},
+            {"role": "user", "content": safe_prompt},
+        ]
 
         models_to_try = [route.primary, route.fallback]
         saw_rate_limit = False
@@ -202,6 +212,7 @@ class GroqAdapter:
         *,
         role: AgentRole = AgentRole.LIGHTWEIGHT_PARSER,
         retries: int = 2,
+        system_prompt: str | None = None,
         user_api_key: str | None = None,
     ) -> T:
         if user_api_key and user_api_key.strip():
@@ -210,5 +221,19 @@ class GroqAdapter:
                 routes=self._routes,
                 transport=self._transport,
             )
-            return await call_structured(scoped, prompt, schema, role=role, retries=retries)
-        return await call_structured(self, prompt, schema, role=role, retries=retries)
+            return await call_structured(
+                scoped,
+                prompt,
+                schema,
+                role=role,
+                retries=retries,
+                system_prompt=system_prompt,
+            )
+        return await call_structured(
+            self,
+            prompt,
+            schema,
+            role=role,
+            retries=retries,
+            system_prompt=system_prompt,
+        )

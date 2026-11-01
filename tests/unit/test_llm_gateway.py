@@ -14,7 +14,7 @@ from app.adapters.llm.groq_adapter import (
 )
 from app.guardrails.budget import BudgetExceededError, TokenBudgetGuard
 from app.guardrails.validator import StructuredOutputError, call_structured
-from app.ports.llm import ROLE_MODEL_ROUTES, AgentRole
+from app.ports.llm import ROLE_MODEL_ROUTES, ROLE_SYSTEM_PROMPTS, AgentRole
 
 
 class _SampleJobExtract(BaseModel):
@@ -179,3 +179,27 @@ async def test_missing_api_key_raises_clear_ui_error() -> None:
     with pytest.raises(MissingAPIKeyError) as exc_info:
         await adapter.complete("Hello")
     assert exc_info.value.ui_action == "CHANGE_API_KEY"
+
+
+@pytest.mark.unit
+async def test_role_system_prompts_injected_into_groq_messages() -> None:
+    """Every AgentRole has a dedicated system prompt that GroqAdapter prepends as messages[0]."""
+    for role in AgentRole:
+        assert role in ROLE_SYSTEM_PROMPTS
+        assert len(ROLE_SYSTEM_PROMPTS[role]) > 40
+
+    captured_messages: list[dict[str, Any]] = []
+
+    async def capture_transport(
+        api_key: str, model: str, messages: list[dict[str, Any]], json_mode: bool
+    ) -> GroqTransportResponse:
+        captured_messages.extend(messages)
+        return GroqTransportResponse(status_code=200, content="In-role response")
+
+    adapter = GroqAdapter(default_api_key="sys-key", transport=capture_transport)
+    await adapter.complete("how can you help", role=AgentRole.LIGHTWEIGHT_PARSER)
+
+    assert len(captured_messages) == 2
+    assert captured_messages[0]["role"] == "system"
+    assert "MINT Job Finder & Intent Parser Agent" in captured_messages[0]["content"]
+    assert captured_messages[1] == {"role": "user", "content": "how can you help"}

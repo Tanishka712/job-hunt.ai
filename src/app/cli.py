@@ -15,7 +15,12 @@ from app.adapters.llm.groq_adapter import (
 )
 from app.core.settings import get_settings
 from app.guardrails.pii_shield import contains_secret, shield
-from app.ports.llm import ROLE_MODEL_ROUTES, AgentRole, LLMClient
+from app.ports.llm import (
+    ROLE_MODEL_ROUTES,
+    AgentRole,
+    LLMClient,
+    get_role_system_prompt,
+)
 
 
 class CLIJobPreview(BaseModel):
@@ -40,6 +45,12 @@ def _print_roles() -> None:
     print("-" * 78)
     for role, route in ROLE_MODEL_ROUTES.items():
         print(f"{role.value:<22} | {route.primary:<25} | {route.fallback:<25}")
+    print()
+
+
+def _print_system_prompt(role: AgentRole) -> None:
+    print(f"\n=== System Prompt for {role.value} ===")
+    print(get_role_system_prompt(role))
     print()
 
 
@@ -94,10 +105,12 @@ async def _run_interactive(llm: LLMClient, initial_role: AgentRole) -> int:
     print("Commands:")
     print("  /roles                  List all AgentRoles and Groq models")
     print("  /role <role_name>       Switch active AgentRole (e.g. /role analytical_reasoner)")
+    print("  /system                 Show the active AgentRole's system prompt")
     print("  /shield <text>          Test PII/credential redaction locally")
     print("  /extract <job_text>     Run structured Pydantic job extraction on live LLM")
     print("  /quit                   Exit interactive session")
     print(f"\nActive role: {current_role.value} ({ROLE_MODEL_ROUTES[current_role].primary})")
+    print(f"System prompt: {get_role_system_prompt(current_role)}")
 
     while True:
         try:
@@ -114,6 +127,9 @@ async def _run_interactive(llm: LLMClient, initial_role: AgentRole) -> int:
         if line == "/roles":
             _print_roles()
             continue
+        if line == "/system":
+            _print_system_prompt(current_role)
+            continue
         if line.startswith("/role "):
             target = line.split(" ", 1)[1].strip()
             try:
@@ -122,6 +138,7 @@ async def _run_interactive(llm: LLMClient, initial_role: AgentRole) -> int:
                     f"Switched to {current_role.value} "
                     f"(Primary: {ROLE_MODEL_ROUTES[current_role].primary})"
                 )
+                print(f"System prompt: {get_role_system_prompt(current_role)}")
             except ValueError:
                 valid = ", ".join(r.value for r in AgentRole)
                 print(f"Unknown role '{target}'. Valid roles: {valid}")
@@ -221,6 +238,10 @@ async def async_main(
 
 def main() -> None:
     """Synchronous console_scripts entrypoint."""
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     raise SystemExit(asyncio.run(async_main()))
 
 
