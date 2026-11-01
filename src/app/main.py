@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from app.adapters.llm.groq_adapter import GroqAdapter
 from app.api.jobs import router as jobs_router
+from app.api.resume import router as resume_router
 from app.core.container import StorageContainer, build_in_memory_storage
 from app.core.settings import get_settings
 from app.ports.llm import LLMClient
@@ -35,6 +36,7 @@ def create_app(
         }
 
     application.include_router(jobs_router)
+    application.include_router(resume_router)
     return application
 
 

@@ -16,7 +16,8 @@ from app.adapters.llm.groq_adapter import (
     RateLimitExceededError,
 )
 from app.agents.job_finder.graph import run_job_finder
-from app.agents.job_finder.schemas import JobIngestRequest
+from app.agents.job_finder.schemas import JobIngestRequest, JobSpec, RemotePolicy, SeniorityLevel
+from app.agents.resume.graph import create_initial_resume, refine_resume
 from app.core.container import StorageContainer, build_in_memory_storage
 from app.core.seed import seed_user_data
 from app.core.settings import get_settings
@@ -156,6 +157,68 @@ async def _run_job_finder_cli(
     return 0
 
 
+async def _run_resume_cli(
+    llm: LLMClient,
+    storage: StorageContainer,
+    job_text: str,
+    *,
+    user_id: str = "cli-user",
+    job_id: str = "job-cli",
+    refine_message: str | None = None,
+) -> int:
+    """Run S4 Resume Customizer Agent to draft v1 (and optionally refine to v2)."""
+    spec = JobSpec(
+        title=job_text[:80],
+        company="CLI Target Co",
+        location="Remote",
+        remote_policy=RemotePolicy.REMOTE,
+        seniority=SeniorityLevel.SENIOR,
+        required_skills=["Python", "FastAPI", "LangGraph", "Azure Cosmos DB", "Docker"],
+        responsibilities=[job_text],
+        source_url="https://cli.local/job",
+        is_job_posting=True,
+    )
+    print(f"\n=== S4 Resume Customizer Agent (Session: resume:{user_id}:{job_id}) ===")
+    try:
+        artifact = await create_initial_resume(
+            user_id=user_id,
+            job_id=job_id,
+            job_spec=spec,
+            llm=llm,
+            storage=storage,
+            pinned_instructions=["Keep to one page"],
+        )
+        print(f"[Version]          v{artifact.version}")
+        print(f"[Verifier Passed]  {artifact.verifier_report.passed}")
+        print(f"[Cited Chunks]     {artifact.source_chunk_ids}")
+        print(f"[PDF Blob URI]     {artifact.blob_url}")
+        print("\n[Tailored Draft]")
+        print(json.dumps(artifact.draft.model_dump(mode="json"), indent=2))
+
+        if refine_message:
+            print(f"\n--- Refining Resume: '{refine_message}' ---")
+            ref_res = await refine_resume(
+                user_id=user_id,
+                job_id=job_id,
+                message=refine_message,
+                llm=llm,
+                storage=storage,
+            )
+            print(f"[Intent]           {ref_res.intent.value}")
+            print(f"[Active Version]   v{ref_res.current_version}")
+            print(f"[Reply]            {ref_res.reply}")
+            if ref_res.diff_text:
+                print(f"\n[Diff]\n{ref_res.diff_text}")
+            elif ref_res.artifact:
+                print("\n[Updated Draft]")
+                print(json.dumps(ref_res.artifact.draft.model_dump(mode="json"), indent=2))
+    except (RateLimitExceededError, MissingAPIKeyError) as exc:
+        print(f"\n[UI Action: {exc.ui_action}] {exc}", file=sys.stderr)
+        return 2
+    print()
+    return 0
+
+
 async def _run_interactive(
     llm: LLMClient,
     storage: StorageContainer,
@@ -170,6 +233,8 @@ async def _run_interactive(
     print("  /shield <text>          Test PII/credential redaction locally")
     print("  /extract <job_text>     Run S2 structured Pydantic job preview")
     print("  /job <url|file|text>    Run S3 Job Finder (scrape + JobSpec + CV score + dedupe)")
+    print("  /resume <job_text>      Run S4 Resume Customizer (draft v1 from CV chunks + PDF)")
+    print("  /resume-refine <msg>    Refine active S4 Resume (edit / question / revert / compare)")
     print("  /quit                   Exit interactive session")
     print(f"\nActive role: {current_role.value} ({ROLE_MODEL_ROUTES[current_role].primary})")
     print(f"System prompt: {get_role_system_prompt(current_role)}")
@@ -213,6 +278,25 @@ async def _run_interactive(
             continue
         if line.startswith("/job "):
             await _run_job_finder_cli(llm, storage, line.split(" ", 1)[1])
+            continue
+        if line.startswith("/resume "):
+            await _run_resume_cli(llm, storage, line.split(" ", 1)[1])
+            continue
+        if line.startswith("/resume-refine "):
+            msg = line.split(" ", 1)[1]
+            res = await refine_resume(
+                user_id="cli-user",
+                job_id="job-cli",
+                message=msg,
+                llm=llm,
+                storage=storage,
+            )
+            print(f"\n[Intent: {res.intent.value} | Active Version: v{res.current_version}]")
+            print(res.reply)
+            if res.diff_text:
+                print(f"\n{res.diff_text}\n")
+            elif res.artifact:
+                print(json.dumps(res.artifact.draft.model_dump(mode="json"), indent=2))
             continue
 
         await _run_prompt(llm, line, current_role)
@@ -270,6 +354,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="User ID to score and deduplicate against.",
     )
 
+    res_p = sub.add_parser(
+        "resume",
+        help="Run the S4 Resume Customizer Agent to draft (and optionally refine) a resume.",
+    )
+    res_p.add_argument("job_text", help="Target job title/description to tailor the CV for.")
+    res_p.add_argument(
+        "--refine",
+        default=None,
+        help="Optional conversational refinement message to apply on top of v1.",
+    )
+    res_p.add_argument("--user-id", default="cli-user", help="User ID.")
+
     inter_p = sub.add_parser("interactive", help="Start an interactive REPL session.")
     inter_p.add_argument(
         "--role",
@@ -309,6 +405,15 @@ async def async_main(
 
     if args.command == "job-finder":
         return await _run_job_finder_cli(llm, storage, args.target, user_id=args.user_id)
+
+    if args.command == "resume":
+        return await _run_resume_cli(
+            llm,
+            storage,
+            args.job_text,
+            user_id=args.user_id,
+            refine_message=args.refine,
+        )
 
     role = AgentRole(args.role)
 

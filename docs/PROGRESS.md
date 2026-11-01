@@ -6,7 +6,7 @@
 | S1 | Storage adapters + cross-user caches | R0-R2 | DONE | `docs/test-reports/step-1.md` (97% cov, 17/17 PASS) | GitHub CI (`main`) — Azure deferred to S8 |
 | S2 | Multi-model LLM gateway, BYOK + guardrails | R1 | DONE | `docs/test-reports/step-2.md` (93% cov, 46/46 PASS + 4/4 Live Groq PASS) | GitHub CI (`main`) — Azure deferred to S8 |
 | S3 | Job Finder LLM agent + match scorer | R1 | DONE | `docs/test-reports/step-3.md` (89% cov, 71/71 PASS + Live CLI PASS) | GitHub CI (`main`) — Azure deferred to S8 |
-| S4 | Resume Customizer agent (own memory) | R2 | TODO | | |
+| S4 | Resume Customizer agent (own memory) | R2 | DONE | `docs/test-reports/step-4.md` (89% cov, 85/85 PASS + Live CLI PASS) | GitHub CI (`main`) — Azure deferred to S8 |
 | S5 | Networker agent | R1 | TODO | | |
 | S6 | Company Research agent | R1 | TODO | | |
 | S7 | Email Customizer / Outreach agent (own memory) | R2 | TODO | | |
@@ -25,8 +25,9 @@
    - `COPYWRITER` (`S7` Email Outreach Drafter): `openai/gpt-oss-120b` (fallback: `qwen/qwen3.8-27b`)
    - `VISION_AUDITOR` (`S10`/`S11` Playwright Form Auditor): `qwen/qwen3.8-27b` (fallback: `openai/gpt-oss-20b`)
 2. **Per-User BYOK & Explicit Rate-Limit UI Error (`S2`)**: Single default key + per-user BYOK (`user_api_key`). When Groq returns `429`, `GroqAdapter` raises `RateLimitExceededError` with `ui_action = "CHANGE_API_KEY"`.
-3. **Cross-User Global Job Cache + HTML Cleaner (`S3`)**: `scrape_job` (`Risk.R1_READ_EXTERNAL`) checks `robots.txt`, extracts JSON-LD `JobPosting` metadata, and strips HTML noise to $\le 3,000$ chars (~750 tokens). Parsed `JobSpec`s are cached in `GlobalJobCacheRepo` by normalized URL for 30 days so multiple users ingesting the same job URL consume 0 extra LLM tokens.
-4. **Azure Provisioning Deferred to `S8`**: Preserves Azure for Students credit during `S0`–`S7` development while GitHub Actions CI runs on every push to `https://github.com/Tanishka712/job-hunt.ai`.
+3. **Cross-User Global Job Cache + HTML Cleaner (`S3`)**: `scrape_job` (`Risk.R1_READ_EXTERNAL`) checks `robots.txt`, extracts JSON-LD `JobPosting` metadata, and strips HTML noise to $\le 3,000$ chars (~750 tokens). Parsed `JobSpec`s are cached in `GlobalJobCacheRepo` by normalized URL for 30 days.
+4. **Pure-Python Single-Page PDF Renderer & Truthfulness Verifier (`S4`)**: `render_and_store_resume` (`Risk.R2_WRITE_INTERNAL`) produces both Markdown (`v{n}.md`) and a valid single-page PDF 1.4 (`v{n}.pdf`) with zero native binary dependencies. `verify_resume_draft` enforces chunk-ID grounding, rejects invented metrics, and enforces durable `pinned_instructions` (including `"never mention X"` and `"keep to one page"`).
+5. **Azure Provisioning Deferred to `S8`**: Preserves Azure for Students credit during `S0`–`S7` development while GitHub Actions CI runs on every push to `https://github.com/Tanishka712/job-hunt.ai`.
 
 ## Open questions for the user
-- `S3` is complete and verified against live Groq (`71/71 PASSED`). Test via CLI and say **"proceed with s4"** to start `S4` (Resume Customizer Agent with isolated conversational memory, truthfulness verifier, and PDF renderer).
+- `S4` is complete and verified against live Groq (`85/85 PASSED`). Test via CLI and say **"next"** to start `S5` (Networker Agent for recruiter/hiring-manager discovery + `OutreachLogRepo` deduplication).

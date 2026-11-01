@@ -107,3 +107,42 @@ async def test_cli_job_finder_subcommand(capsys: pytest.CaptureFixture[str]) -> 
     assert "[Status]           PARSED" in out
     assert '"company": "Acme AI"' in out
     assert "[CV Match Score]" in out
+
+
+@pytest.mark.unit
+async def test_cli_resume_subcommand(capsys: pytest.CaptureFixture[str]) -> None:
+    """`resume` CLI command runs S4 Resume Customizer and optional refinement turn."""
+    fake_llm = FakeLLM(
+        scripted_responses=[
+            (
+                '{"professional_summary": "Senior AI Engineer skilled in Python and FastAPI.", '
+                '"bullets": [{"text": "Architected multi-agent LLM workflows using Python, '
+                'FastAPI, and LangGraph.", "source_chunk_ids": ["cli-user-chunk-1"]}], '
+                '"highlighted_skills": ["Python", "FastAPI", "LangGraph"]}'
+            ),
+            (
+                '{"intent": "edit", "pinned_instruction_to_add": "Never mention Kubernetes", '
+                '"target_version": null, "compare_from_version": null}'
+            ),
+            (
+                '{"professional_summary": "Senior AI Engineer with Azure Cosmos DB.", '
+                '"bullets": [{"text": "Designed semantic vector search pipelines on Azure AI '
+                'Search and Azure Cosmos DB.", "source_chunk_ids": ["cli-user-chunk-2"]}], '
+                '"highlighted_skills": ["Python", "FastAPI", "Azure Cosmos DB"]}'
+            ),
+        ]
+    )
+    code = await async_main(
+        [
+            "resume",
+            "Senior AI Platform Engineer",
+            "--refine",
+            "Focus on Azure Cosmos DB and never mention Kubernetes",
+        ],
+        llm_override=fake_llm,
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "[Version]          v1" in out
+    assert "[Verifier Passed]  True" in out
+    assert "[Active Version]   v2" in out
