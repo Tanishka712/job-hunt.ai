@@ -25,6 +25,9 @@ dev = [
     "mypy>=1.10.0",
 ]
 
+[project.scripts]
+mint-cli = "app.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

@@ -20,6 +20,7 @@ Stack: FastAPI + LangGraph on Azure Container Apps, Cosmos DB, Blob Storage, Azu
 10. **Proactive step-by-step external setup guides.** Whenever a step touches an external account, cloud project, repository, or API (GitHub, Azure, Groq, Search APIs, etc.), ALWAYS:
     - State clearly whether creating it is **compulsory right now** or **can be deferred** (because local development uses `InMemory*` fakes and `FakeLLM`).
     - Provide a complete, numbered **step-by-step guide** showing the user what account/project/API to create, exact CLI commands or portal clicks, cost tier, and where to store the resulting config/keys safely (`.env`, GitHub Secrets, or Azure Key Vault — never pasted into chat).
+11. **Interactive CLI testing at every agentic stage.** Every stage that adds or modifies agentic architecture (`S2`–`S8`) MUST add or update a subcommand in `src/app/cli.py` (`python -m app.cli ...`) so the user can test the live agent directly from their terminal, and every step summary must include exact copy-paste CLI commands for the user to try.
 
 ## Which agent to use
 

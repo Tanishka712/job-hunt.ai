@@ -20,7 +20,8 @@ You turn the build plan into working, tested code, one small step at a time. The
 3. **Wrap, don't trust.** Every LLM output goes through a Pydantic model with at most 2 retries. Every tool declares its risk level. Every external dependency sits behind a port (interface) with an in-memory fake.
 4. **Run locally**: `bash .agent/skills/mint-tester/scripts/run_gate.sh`. When green, hand off to `mint-tester` for the deeper step checks, then to `mint-deployer`.
 5. **External setup guide**: For any external service, cloud resource, repository, or API key relevant to the current or upcoming step, state clearly if it is **compulsory now vs. deferrable**, and provide a numbered step-by-step guide for the user to create/configure it safely.
-6. **Update docs**: tick the step in `docs/PROGRESS.md`, note decisions and any deviations from the architecture, then stop and report. The user decides when to proceed.
+6. **CLI testability**: Whenever agentic architecture changes (`S2`–`S8`), expose a CLI subcommand in `src/app/cli.py` (`python -m app.cli ...`) and give the user copy-paste CLI commands to test the live agent themselves before moving on.
+7. **Update docs**: tick the step in `docs/PROGRESS.md`, note decisions and any deviations from the architecture, then stop and report. The user decides when to proceed.
 
 ## Non-negotiable design decisions (and why)
 
