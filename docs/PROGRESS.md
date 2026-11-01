@@ -4,7 +4,7 @@
 |---|---|---|---|---|---|
 | S0 | Skeleton + CI/CD | R0 | DONE | `docs/test-reports/step-0.md` (100% cov, PASS) | GitHub CI (`main`) — Azure deferred to S8 |
 | S1 | Storage adapters + cross-user caches | R0-R2 | DONE | `docs/test-reports/step-1.md` (97% cov, 17/17 PASS) | GitHub CI (`main`) — Azure deferred to S8 |
-| S2 | Multi-model & multi-key LLM gateway + guardrails | R1 | IN_PROGRESS | | |
+| S2 | Multi-model & multi-key LLM gateway + guardrails | R1 | DONE | `docs/test-reports/step-2.md` (93% cov, 45/45 PASS + Live Groq PASS) | GitHub CI (`main`) — Azure deferred to S8 |
 | S3 | Job Finder LLM agent + match scorer | R1 | TODO | | |
 | S4 | Resume Customizer agent (own memory) | R2 | TODO | | |
 | S5 | Networker agent | R1 | TODO | | |
