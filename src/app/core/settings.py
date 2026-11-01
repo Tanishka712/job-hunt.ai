@@ -16,13 +16,16 @@ class Settings(BaseSettings):
 
     git_sha: str = "dev"
     environment: str = "local"
-    groq_api_keys: str = ""
     groq_api_key: str = ""
+    groq_api_keys: str = ""
 
-    def parsed_groq_keys(self) -> list[str]:
-        """Return list of configured Groq API keys from GROQ_API_KEYS or GROQ_API_KEY."""
-        raw = self.groq_api_keys or self.groq_api_key
-        return [k.strip() for k in raw.split(",") if k.strip()]
+    def active_groq_api_key(self) -> str:
+        """Return the configured default Groq API key."""
+        if self.groq_api_key.strip():
+            return self.groq_api_key.strip()
+        if self.groq_api_keys.strip():
+            return self.groq_api_keys.split(",")[0].strip()
+        return ""
 
 
 @lru_cache(maxsize=1)

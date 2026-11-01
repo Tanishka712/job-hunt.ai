@@ -1,4 +1,4 @@
-"""Groq multi-model LLM adapter with automatic key rotation and model fallback."""
+"""Groq multi-model LLM adapter with per-user BYOK and explicit rate-limit errors for UI."""
 
 import logging
 from collections.abc import Awaitable, Callable
@@ -8,7 +8,6 @@ from typing import Any, TypeVar
 import httpx
 from pydantic import BaseModel
 
-from app.adapters.llm.key_pool import GroqKeyPool
 from app.guardrails.pii_shield import RedactingLogFilter, shield
 from app.guardrails.validator import call_structured
 from app.ports.llm import ROLE_MODEL_ROUTES, AgentRole, ModelRoute
@@ -29,6 +28,7 @@ class GroqTransportResponse:
     content: str
     remaining_tokens: int | None = None
     remaining_requests: int | None = None
+    retry_after_seconds: int | None = None
     tokens_used: int = 0
 
 
@@ -40,7 +40,7 @@ def _parse_int_header(headers: httpx.Headers, name: str) -> int | None:
     if raw is None:
         return None
     try:
-        return int(raw)
+        return int(float(raw))
     except ValueError:
         return None
 
@@ -69,6 +69,7 @@ async def default_httpx_groq_transport(
 
     rem_tok = _parse_int_header(resp.headers, "x-ratelimit-remaining-tokens")
     rem_req = _parse_int_header(resp.headers, "x-ratelimit-remaining-requests")
+    retry_after = _parse_int_header(resp.headers, "retry-after")
 
     if resp.status_code != 200:
         return GroqTransportResponse(
@@ -76,6 +77,7 @@ async def default_httpx_groq_transport(
             content=resp.text,
             remaining_tokens=rem_tok,
             remaining_requests=rem_req,
+            retry_after_seconds=retry_after,
         )
 
     body = resp.json()
@@ -91,24 +93,64 @@ async def default_httpx_groq_transport(
 
 
 class GroqAdapterError(RuntimeError):
-    """Raised when both primary and fallback models fail across available Groq keys."""
+    """Base error for Groq LLM gateway failures."""
 
 
-class GroqAdapter:
-    """Guarded Groq LLMClient routing each AgentRole to its dedicated model family."""
+class MissingAPIKeyError(GroqAdapterError):
+    """Raised when neither a per-user BYOK key nor a default GROQ_API_KEY is provided."""
+
+    def __init__(self) -> None:
+        self.ui_action = "CHANGE_API_KEY"
+        super().__init__(
+            "No Groq API key configured. Please add or change your Groq API key in settings."
+        )
+
+
+class RateLimitExceededError(GroqAdapterError):
+    """Raised when Groq returns 429 so the UI can prompt the user to change their API key."""
 
     def __init__(
         self,
-        key_pool: GroqKeyPool,
+        *,
+        role: AgentRole,
+        model: str,
+        retry_after_seconds: int | None = None,
+    ) -> None:
+        self.role = role
+        self.model = model
+        self.retry_after_seconds = retry_after_seconds
+        self.ui_action = "CHANGE_API_KEY"
+        wait_hint = (
+            f" (retry after {retry_after_seconds}s)" if retry_after_seconds is not None else ""
+        )
+        super().__init__(
+            f"Groq rate limit reached for model '{model}' (role '{role.value}'){wait_hint}. "
+            f"Please enter or change your Groq API key (BYOK) in settings, or wait and retry."
+        )
+
+
+class GroqAdapter:
+    """Guarded Groq LLMClient supporting per-user BYOK and explicit rate-limit UI errors."""
+
+    def __init__(
+        self,
+        default_api_key: str = "",
         *,
         routes: dict[AgentRole, ModelRoute] | None = None,
         transport: GroqTransportFn | None = None,
     ) -> None:
-        self._key_pool = key_pool
+        self._default_api_key = default_api_key.strip()
         self._routes = dict(ROLE_MODEL_ROUTES)
         if routes:
             self._routes.update(routes)
         self._transport = transport or default_httpx_groq_transport
+
+    def _resolve_api_key(self, user_api_key: str | None) -> str:
+        if user_api_key and user_api_key.strip():
+            return user_api_key.strip()
+        if self._default_api_key:
+            return self._default_api_key
+        raise MissingAPIKeyError()
 
     async def complete(
         self,
@@ -118,36 +160,38 @@ class GroqAdapter:
         json_mode: bool = False,
         user_api_key: str | None = None,
     ) -> str:
+        api_key = self._resolve_api_key(user_api_key)
         safe_prompt = shield(prompt)
         route = self._routes[role]
         messages = [{"role": "user", "content": safe_prompt}]
 
-        # Try primary model across up to max(1, key_pool.size) keys, then fallback model
         models_to_try = [route.primary, route.fallback]
-        key_attempts = max(1, self._key_pool.size)
-
+        saw_rate_limit = False
+        last_retry_after: int | None = None
         last_status = 0
         last_body = ""
-        for model_idx, model in enumerate(models_to_try):
-            attempts_for_model = key_attempts if model_idx == 0 else 1
-            for _ in range(attempts_for_model):
-                api_key = self._key_pool.acquire(model, user_api_key=user_api_key)
-                logger.info("Dispatching role=%s to model=%s", role.value, model)
-                resp = await self._transport(api_key, model, messages, json_mode)
-                last_status = resp.status_code
-                last_body = shield(resp.content[:300])
-                self._key_pool.record_response(
-                    api_key,
-                    model,
-                    status_code=resp.status_code,
-                    remaining_tokens=resp.remaining_tokens,
-                    remaining_requests=resp.remaining_requests,
-                )
-                if resp.status_code == 200:
-                    return resp.content
+
+        for model in models_to_try:
+            logger.info("Dispatching role=%s to model=%s", role.value, model)
+            resp = await self._transport(api_key, model, messages, json_mode)
+            if resp.status_code == 200:
+                return resp.content
+
+            last_status = resp.status_code
+            last_body = shield(resp.content[:300])
+            if resp.status_code == 429:
+                saw_rate_limit = True
+                last_retry_after = resp.retry_after_seconds
+
+        if saw_rate_limit:
+            raise RateLimitExceededError(
+                role=role,
+                model=route.primary,
+                retry_after_seconds=last_retry_after,
+            )
 
         raise GroqAdapterError(
-            f"All Groq keys and fallback models failed for role '{role.value}' "
+            f"Groq request failed for role '{role.value}' "
             f"(last_status={last_status}, body={last_body})"
         )
 
@@ -158,5 +202,13 @@ class GroqAdapter:
         *,
         role: AgentRole = AgentRole.LIGHTWEIGHT_PARSER,
         retries: int = 2,
+        user_api_key: str | None = None,
     ) -> T:
+        if user_api_key and user_api_key.strip():
+            scoped = GroqAdapter(
+                default_api_key=user_api_key.strip(),
+                routes=self._routes,
+                transport=self._transport,
+            )
+            return await call_structured(scoped, prompt, schema, role=role, retries=retries)
         return await call_structured(self, prompt, schema, role=role, retries=retries)

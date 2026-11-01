@@ -4,7 +4,7 @@
 |---|---|---|---|---|---|
 | S0 | Skeleton + CI/CD | R0 | DONE | `docs/test-reports/step-0.md` (100% cov, PASS) | GitHub CI (`main`) — Azure deferred to S8 |
 | S1 | Storage adapters + cross-user caches | R0-R2 | DONE | `docs/test-reports/step-1.md` (97% cov, 17/17 PASS) | GitHub CI (`main`) — Azure deferred to S8 |
-| S2 | Multi-model & multi-key LLM gateway + guardrails | R1 | DONE | `docs/test-reports/step-2.md` (93% cov, 45/45 PASS + Live Groq PASS) | GitHub CI (`main`) — Azure deferred to S8 |
+| S2 | Multi-model LLM gateway, BYOK + guardrails | R1 | DONE | `docs/test-reports/step-2.md` (93% cov, 46/46 PASS + 4/4 Live Groq PASS) | GitHub CI (`main`) — Azure deferred to S8 |
 | S3 | Job Finder LLM agent + match scorer | R1 | TODO | | |
 | S4 | Resume Customizer agent (own memory) | R2 | TODO | | |
 | S5 | Networker agent | R1 | TODO | | |
@@ -17,17 +17,15 @@
 | S12 | Hardening and observability | - | TODO | | |
 
 ## Decisions and deviations
-1. **Role-Based Multi-Model Routing on Groq (`S2`)**: Groq (`api.groq.com/openai/v1`) serves as the single inference provider, routing each agent role (`AgentRole`) to an independent model family bucket on Groq:
-   - `LIGHTWEIGHT_PARSER` (`S3` Job Finder & Intent Routers): `llama-3.1-8b-instant` (overflow: `gemma2-9b-it`)
-   - `ANALYTICAL_REASONER` (`S4` Resume Customizer): `openai/gpt-oss-120b` (overflow: `qwen/qwen3-32b`)
-   - `PEOPLE_RANKER` (`S5` Networker): `openai/gpt-oss-20b` (overflow: `llama-3.1-8b-instant`)
-   - `SEARCH_SYNTHESIZER` (`S6` Company Research): `qwen/qwen3-32b` (overflow: `openai/gpt-oss-20b`)
-   - `COPYWRITER` (`S7` Email Outreach Drafter): `llama-3.3-70b-versatile` (overflow: `meta-llama/llama-4-scout-17b-16e-instruct`)
-   - `VISION_AUDITOR` (`S10`/`S11` Playwright Form Auditor): `meta-llama/llama-4-scout-17b-16e-instruct`
-2. **10 Users x 50 Jobs/Day (500 Jobs/Day) Scaling Architecture**:
-   - `S3` always uses its lightweight LLM (`llama-3.1-8b-instant`) to extract structured `JobSpec` fields, while `scrape_job` strips HTML/JSON-LD boilerplate down to ~750 tokens per job (~950 tokens total per LLM parse).
-   - Shared public Cosmos caches (`global_jobs` 30-day TTL and `company_briefs` 7-day TTL) avoid re-parsing the same job URL or company across users, while user data (`/user_id`) and sessions (`resume:{user_id}:{job_id}`, `email:{user_id}:{job_id}:{contact_id}`) remain strictly isolated.
-   - `S2` includes `GroqKeyPool` (round-robin API key rotation + optional per-user BYOK) and an async token-bucket rate limiter to pace batch runs smoothly.
+1. **Role-Based Multi-Model Routing on Groq (`S2`)**: Groq (`api.groq.com/openai/v1`) routes each agent role (`AgentRole`) to an independent live-verified model family bucket on Groq:
+   - `LIGHTWEIGHT_PARSER` (`S3` Job Finder & Intent Routers): `openai/gpt-oss-20b` (fallback: `allam-2-7b` [7,000 RPD])
+   - `ANALYTICAL_REASONER` (`S4` Resume Customizer): `openai/gpt-oss-120b` (fallback: `qwen/qwen3.8-27b`)
+   - `PEOPLE_RANKER` (`S5` Networker): `allam-2-7b` (fallback: `openai/gpt-oss-20b`)
+   - `SEARCH_SYNTHESIZER` (`S6` Company Research): `qwen/qwen3.8-27b` (fallback: `openai/gpt-oss-20b`)
+   - `COPYWRITER` (`S7` Email Outreach Drafter): `openai/gpt-oss-120b` (fallback: `qwen/qwen3.8-27b`)
+   - `VISION_AUDITOR` (`S10`/`S11` Playwright Form Auditor): `qwen/qwen3.8-27b` (fallback: `openai/gpt-oss-20b`)
+2. **Per-User BYOK & Explicit Rate-Limit UI Error (`S2`)**: Removed round-robin key rotation in favor of a single default key + per-user BYOK (`user_api_key`). When Groq returns `429`, `GroqAdapter` raises `RateLimitExceededError` with `ui_action = "CHANGE_API_KEY"` and `retry_after_seconds` so the UI clearly prompts the user to enter/change their Groq API key.
+3. **Azure Provisioning Deferred to `S8`**: Preserves Azure for Students credit during `S0`–`S7` development while GitHub Actions CI runs on every push to `https://github.com/Tanishka712/job-hunt.ai`.
 
 ## Open questions for the user
-- `S0` local gate is green (`PASS`, 100% coverage). Say **"next"** to start `S1` (Storage Ports, Fakes & Cross-User Caches), or let me know if you want to push/deploy `S0` to GitHub/Azure first.
+- `S2` is complete and tested against all 4 live Groq models (`4/4 PASSED`). Say **"next"** to start `S3` (Job Finder LLM Agent + Match Scorer).
