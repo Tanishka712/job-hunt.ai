@@ -1,0 +1,111 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ACR_NAME: ${{ secrets.ACR_NAME }}
+  RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+  CONTAINER_APP_NAME: ${{ secrets.AZURE_CONTAINER_APP_NAME }}
+  IMAGE_NAME: mint-api
+
+jobs:
+  test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run Universal MINT Gate
+        run: |
+          bash .agent/skills/mint-tester/scripts/run_gate.sh
+
+  deploy-staging:
+    name: Build & Deploy to Staging
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      HAS_AZURE_CREDS: ${{ secrets.AZURE_CREDENTIALS != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Azure Credentials
+        if: env.HAS_AZURE_CREDS != 'true'
+        run: |
+          echo "Azure provisioning is deferred until S8 (AZURE_CREDENTIALS not set). Skipping staging deploy."
+
+      - name: Log in to Azure
+        if: env.HAS_AZURE_CREDS == 'true'
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Log in to Azure Container Registry (ACR)
+        if: env.HAS_AZURE_CREDS == 'true'
+        run: |
+          az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Build & Push Docker Image
+        if: env.HAS_AZURE_CREDS == 'true'
+        run: |
+          ACR_SERVER="${{ env.ACR_NAME }}.azurecr.io"
+          TAG="${ACR_SERVER}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          LATEST="${ACR_SERVER}/${{ env.IMAGE_NAME }}:latest"
+          docker build --build-arg GIT_SHA="${{ github.sha }}" -t "$TAG" -t "$LATEST" .
+          docker push "$TAG"
+          docker push "$LATEST"
+
+      - name: Deploy to Azure Container Apps
+        if: env.HAS_AZURE_CREDS == 'true'
+        run: |
+          az containerapp update \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image "${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+
+      - name: Smoke Test Staging Endpoint
+        if: env.HAS_AZURE_CREDS == 'true'
+        run: |
+          STAGING_URL="${{ secrets.STAGING_URL }}"
+          if [ -n "$STAGING_URL" ]; then
+            bash .agent/skills/mint-deployer/scripts/smoke_test.sh "$STAGING_URL" "${{ github.sha }}"
+          fi
+
+      - name: Webhook Notify Azure DevOps
+        if: always()
+        run: |
+          STATUS="${{ job.status }}"
+          echo "Notifying Azure DevOps of deployment status: $STATUS"
+          if [ -n "${{ secrets.AZURE_DEVOPS_WEBHOOK_URL }}" ]; then
+            curl -X POST "${{ secrets.AZURE_DEVOPS_WEBHOOK_URL }}" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "eventType": "github.actions.deployment",
+                "status": "'"$STATUS"'",
+                "sha": "'"${{ github.sha }}"'",
+                "actor": "'"${{ github.actor }}"'",
+                "repo": "'"${{ github.repository }}"'",
+                "runUrl": "'"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"'"
+              }'
+          else
+            echo "No AZURE_DEVOPS_WEBHOOK_URL configured, skipping webhook."
+          fi

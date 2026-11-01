@@ -1,0 +1,149 @@
+# Azure Pipelines for the MINT job-application system.
+# Triggered by the Azure Pipelines GitHub App on pushes and PRs.
+trigger:
+  branches:
+    include: [main]
+pr:
+  branches:
+    include: [main]
+
+variables:
+  - group: mint-shared            # Key Vault-linked: registry name, azure subscription, etc.
+  - name: imageName
+    value: mint-api
+  - name: isMain
+    value: $[eq(variables['Build.SourceBranch'], 'refs/heads/main')]
+
+stages:
+# ---------------------------------------------------------------- CI
+- stage: CI
+  displayName: Lint, types, tests
+  jobs:
+  - job: test
+    pool: { vmImage: ubuntu-latest }
+    steps:
+    - task: UsePythonVersion@0
+      inputs: { versionSpec: '3.11' }
+    - script: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev]"
+      displayName: Install
+    - script: |
+        ruff check .
+        ruff format --check .
+        mypy src
+      displayName: Static checks
+    - script: |
+        pytest -m "not live and not integration and not e2e" -q \
+          --junitxml=test-results/junit.xml \
+          --cov=src --cov-report=xml:test-results/coverage.xml
+      displayName: Tests (unit, contract, safety, eval)
+    - task: PublishTestResults@2
+      condition: succeededOrFailed()
+      inputs: { testResultsFiles: 'test-results/junit.xml', failTaskOnFailedTests: true }
+    - task: PublishCodeCoverageResults@2
+      condition: succeededOrFailed()
+      inputs: { summaryFileLocation: 'test-results/coverage.xml' }
+
+# ---------------------------------------------------------------- Integration (real dev Azure resources)
+- stage: Integration
+  displayName: Integration tests (dev resources)
+  dependsOn: CI
+  condition: and(succeeded(), eq(variables.isMain, true))
+  jobs:
+  - job: integration
+    pool: { vmImage: ubuntu-latest }
+    steps:
+    - task: UsePythonVersion@0
+      inputs: { versionSpec: '3.11' }
+    - script: pip install -e ".[dev]"
+      displayName: Install
+    - task: AzureCLI@2
+      displayName: Run integration tests
+      inputs:
+        azureSubscription: $(azureServiceConnection)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: pytest -m integration -q --junitxml=test-results/integration.xml
+      env:
+        COSMOS_ENDPOINT: $(devCosmosEndpoint)
+        BLOB_ACCOUNT_URL: $(devBlobAccountUrl)
+        SEARCH_ENDPOINT: $(devSearchEndpoint)
+    - task: PublishTestResults@2
+      condition: succeededOrFailed()
+      inputs: { testResultsFiles: 'test-results/integration.xml' }
+
+# ---------------------------------------------------------------- Build image
+- stage: Build
+  displayName: Build and push image
+  dependsOn: Integration
+  condition: and(succeeded(), eq(variables.isMain, true))
+  jobs:
+  - job: build
+    pool: { vmImage: ubuntu-latest }
+    steps:
+    - task: AzureCLI@2
+      displayName: ACR build
+      inputs:
+        azureSubscription: $(azureServiceConnection)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az acr build \
+            --registry $(acrName) \
+            --image $(imageName):$(Build.SourceVersion) \
+            --build-arg GIT_SHA=$(Build.SourceVersion) .
+
+# ---------------------------------------------------------------- Staging
+- stage: DeployStaging
+  displayName: Deploy to staging
+  dependsOn: Build
+  jobs:
+  - deployment: staging
+    environment: mint-staging
+    pool: { vmImage: ubuntu-latest }
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          - task: AzureCLI@2
+            displayName: Update Container App
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az containerapp update \
+                  --name $(stagingAppName) --resource-group $(resourceGroup) \
+                  --image $(acrName).azurecr.io/$(imageName):$(Build.SourceVersion) \
+                  --set-env-vars GIT_SHA=$(Build.SourceVersion)
+          - script: bash .agent/skills/mint-deployer/scripts/smoke_test.sh "$(stagingUrl)" "$(Build.SourceVersion)"
+            displayName: Smoke test staging
+
+# ---------------------------------------------------------------- Production (approval on the Environment)
+- stage: DeployProd
+  displayName: Deploy to production
+  dependsOn: DeployStaging
+  jobs:
+  - deployment: prod
+    environment: mint-prod        # add Approvals and checks on this environment in Azure DevOps
+    pool: { vmImage: ubuntu-latest }
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          - task: AzureCLI@2
+            displayName: Update Container App
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az containerapp update \
+                  --name $(prodAppName) --resource-group $(resourceGroup) \
+                  --image $(acrName).azurecr.io/$(imageName):$(Build.SourceVersion) \
+                  --set-env-vars GIT_SHA=$(Build.SourceVersion)
+          - script: bash .agent/skills/mint-deployer/scripts/smoke_test.sh "$(prodUrl)" "$(Build.SourceVersion)"
+            displayName: Smoke test production
